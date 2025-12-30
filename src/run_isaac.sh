@@ -17,6 +17,6 @@
 module load anaconda3/2024.06 
 source $ANACONDA3_SH        
 conda activate cool
-python get_mat_agl_features.py -k 112 -c 6.0 -f ../data/tmQMg/tmQMg_properties_and_targets.csv -m Adjacency -dd ../data/tmQMg/xyz --f ../Features
+python get_agl_mat_features.py -k 112 -c 6.0 -f ../data/tmQMg/tmQMg_properties_and_targets.csv -m Adjacency -dd ../data/tmQMg/xyz --f ../Features
 
 mv myjob.* output_features
