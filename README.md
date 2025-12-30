@@ -1,4 +1,4 @@
-# AGL-Score (Accelerated)
+# AGL-MAT-Score (Accelerated)
 
 **Fast, C++ accelerated calculation of Multiscale Weighted Colored Subgraphs (MWCGS) for protein-ligand complexes.**
 
