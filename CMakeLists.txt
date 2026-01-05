@@ -44,6 +44,28 @@ endif()
 # --- 3. CREATE PYTHON MODULE ---
 pybind11_add_module(${PROJECT_NAME} mat_agl_binding.cpp)
 
+# Performance tuning
+target_compile_options(${PROJECT_NAME} PRIVATE
+    -O3
+    -march=native
+    -mtune=native
+    -fPIC
+)
+
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+)
+
+include(CheckIPOSupported)
+check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+if(ipo_supported)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
+
 # --- 4. INCLUDE DIRECTORIES ---
 # We need to explicitly include the Conda include path for headers
 target_include_directories(${PROJECT_NAME} PRIVATE 

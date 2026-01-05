@@ -3,7 +3,7 @@
 """
 Introduction:
     AGL-TM: Algebraic Graph Learning for Transition Metal Complexes
-    Batch Processor (C++ Accelerated)
+    Batch Processor (C++ Accelerated) - Multi-Kernel Support
 
 Author:
     Adapted for Transition Metals (XYZ support) by Brendan LeStrange
@@ -38,7 +38,6 @@ AGL_FEATURE_NAMES = ['COUNTS', 'SUM', 'MIN', 'MAX', 'MEAN', 'MEDIAN', 'STD', 'VA
 def get_metal_symbol(xyz_path):
     """
     Quickly scans XYZ file to find the transition metal symbol.
-    Necessary because C++ returns raw features without labels.
     """
     try:
         with open(xyz_path, 'r') as f:
@@ -69,28 +68,33 @@ class AlgebraicGraphLearningFeatures:
         self.data_folder = args.data_folder
         self.feature_folder = args.feature_folder
         
+        # Load Data once here to prevent re-reading CSV inside loops
+        print(f"Loading input data from {self.path_to_csv}...")
+        self.df_pdbids = pd.read_csv(self.path_to_csv)
+        
         self.final_feature_columns = [
             f"{pair}_{feat}" for pair in MASTER_ATOM_PAIRS for feat in AGL_FEATURE_NAMES
         ]
 
+        if not os.path.exists(self.feature_folder):
+            os.makedirs(self.feature_folder)
+
     def get_agl_features(self, parameters):
-        df_pdbids = pd.read_csv(self.path_to_csv)
-        
         # Target column handling
         target_col = 'tzvp_homo_lumo_gap'
-        if target_col not in df_pdbids.columns:
-            if 'pK' in df_pdbids.columns:
+        if target_col not in self.df_pdbids.columns:
+            if 'pK' in self.df_pdbids.columns:
                 target_col = 'pK'
         
         all_molecular_features = []
         valid_ids = []
         valid_targets = []
 
-        print(f"Processing molecules with C++ Backend...")
+        # print(f"Processing molecules with C++ Backend...")
         
-        for index, row in df_pdbids.iterrows():
+        for index, row in self.df_pdbids.iterrows():
             _id = row['id']
-            target_val = row[target_col] * 1000 if target_col in df_pdbids.columns else 0
+            target_val = row[target_col] * 1000 if target_col in self.df_pdbids.columns else 0
 
             # Path resolution
             xyz_file_flat = os.path.join(self.data_folder, f"{_id}.xyz")
@@ -99,14 +103,13 @@ class AlgebraicGraphLearningFeatures:
             xyz_file = xyz_file_flat if os.path.exists(xyz_file_flat) else xyz_file_nested if os.path.exists(xyz_file_nested) else None
             
             if not xyz_file:
-                print(f"Skipping {_id}: File not found.")
+                # Silent skip to reduce log noise in batch mode
                 continue
 
             try:
                 # 1. Identify Metal
                 metal_symbol = get_metal_symbol(xyz_file)
                 if metal_symbol is None:
-                    print(f"Skipping {_id}: No transition metal found.")
                     continue
 
                 # 2. Compute Features (C++ side)
@@ -131,7 +134,6 @@ class AlgebraicGraphLearningFeatures:
                 # 4. Align to Master Columns
                 row_vector = [row_dict.get(col, 0.0) for col in self.final_feature_columns]
                 
-                # Only if we reach here, we add the data to our results
                 all_molecular_features.append(row_vector)
                 valid_ids.append(_id)
                 valid_targets.append(target_val)
@@ -145,36 +147,60 @@ class AlgebraicGraphLearningFeatures:
         df_features.insert(0, 'ID', valid_ids)
         df_features.insert(1, 'Target', valid_targets)
 
-        print(f"Successfully processed {len(valid_ids)} / {len(df_pdbids)} molecules.")
         return df_features
 
-    def main(self):
-        parameters = {
-            'type': self.df_kernels.loc[self.kernel_index, 'type'],
-            'power': self.df_kernels.loc[self.kernel_index, 'power'], # This is 'kappa' in C++
-            'tau': self.df_kernels.loc[self.kernel_index, 'tau'],
-            'cutoff': self.cutoff
-        }
+    def process_kernel(self, k_idx):
+        """
+        Helper function to run feature generation and saving for a single kernel index.
+        """
+        try:
+            parameters = {
+                'type': self.df_kernels.loc[k_idx, 'type'],
+                'power': self.df_kernels.loc[k_idx, 'power'], 
+                'tau': self.df_kernels.loc[k_idx, 'tau'],
+                'cutoff': self.cutoff
+            }
 
-        print(f"--- Running Kernel {self.kernel_index}: {parameters['type']} (C++) ---")
-        df_features = self.get_agl_features(parameters)
-
-        csv_name = ntpath.basename(self.path_to_csv).split('.')[0]
-        # Include 'cpp' in filename to distinguish
-        output_file_name = f'{csv_name}_AGL_TM_CPP_k{self.kernel_index}_c{self.cutoff}.csv'
-        output_path = os.path.join(self.feature_folder, output_file_name)
-
-        if not os.path.exists(self.feature_folder):
-            os.makedirs(self.feature_folder)
+            print(f"--- Processing Kernel {k_idx}: {parameters['type']} (Power: {parameters['power']}, Tau: {parameters['tau']}) ---")
             
-        df_features.to_csv(output_path, index=False, float_format='%.5f')
-        print(f"Saved features to: {output_path}")
+            t_start = time.time()
+            df_features = self.get_agl_features(parameters)
+            t_end = time.time()
+
+            csv_name = ntpath.basename(self.path_to_csv).split('.')[0]
+            output_file_name = f'{csv_name}_AGL_TM_CPP_k{k_idx}_c{self.cutoff}.csv'
+            output_path = os.path.join(self.feature_folder, output_file_name)
+
+            df_features.to_csv(output_path, index=False, float_format='%.5f')
+            print(f"    -> Saved {len(df_features)} molecules to: {output_file_name} ({t_end - t_start:.2f}s)")
+            
+        except Exception as e:
+            print(f"!!! CRITICAL ERROR on Kernel {k_idx}: {e}")
+
+    def main(self):
+        # Check if user wants a specific kernel or ALL kernels
+        if self.kernel_index == -1:
+            target_indices = self.df_kernels.index.tolist()
+            print(f"No kernel specified. Running ALL {len(target_indices)} kernels found in CSV.")
+        else:
+            if self.kernel_index not in self.df_kernels.index:
+                print(f"Error: Kernel index {self.kernel_index} not found in kernels.csv")
+                return
+            target_indices = [self.kernel_index]
+
+        # Loop through the target indices
+        for k_idx in target_indices:
+            self.process_kernel(k_idx)
 
 
 def get_args(args):
     parser = argparse.ArgumentParser(description="Get AGL-TM Features (C++)")
 
-    parser.add_argument('-k', '--kernel-index', help='Kernel Index (row in kernels.csv)', type=int, required=True)
+    # Set default to -1 to indicate 'ALL', made required=False
+    parser.add_argument('-k', '--kernel-index', 
+                        help='Kernel Index (row in kernels.csv). Omit to run ALL kernels.', 
+                        type=int, default=-1, required=False)
+    
     parser.add_argument('-c', '--cutoff', help='Distance cutoff (Angstroms)', type=float, default=12.0)
     parser.add_argument('-f', '--path_to_csv', help='Path to CSV with IDs and Targets', required=True)
     parser.add_argument('-m', '--matrix_type', type=str,
@@ -194,4 +220,4 @@ def cli_main():
 if __name__ == "__main__":
     t0 = time.time()
     cli_main()
-    print(f'Total Elapsed time: {time.time()-t0:.2f}s')
+    print(f'Total Session time: {time.time()-t0:.2f}s')

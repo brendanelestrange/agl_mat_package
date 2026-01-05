@@ -4,3 +4,4 @@ Features
 learning_curve_xgboost.png
 myjob.*
 agl_tmc_cpp.*
+*.sh

@@ -27,7 +27,7 @@ model = xgb.XGBRegressor(
     colsample_bytree=.7,
     tree_method="hist",
     device = 'cuda',
-    n_jobs=1
+    n_jobs=8
 )
 
 train_sizes, train_scores, test_scores = learning_curve(
@@ -71,4 +71,4 @@ plt.legend()
 plt.tight_layout()
 
 plt.savefig("learning_curve_xgboost.png", dpi=300, bbox_inches="tight")
-plt.show()
+# plt.show()
